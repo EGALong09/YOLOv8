@@ -2,7 +2,7 @@ path: D:/aaaaaWork/projects/datasets/yolov8_cocotest  # 数据集路径
 train: ./images/train  # 训练集图片文件夹
 val: ./images/val  # 验证集图片文件夹
 
-nc: 80  # 类别数量
+nc: 81  # 类别数量
 names: ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant',
   'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite',
   'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
@@ -12,5 +12,5 @@ names: ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 't
   'potted plant', 'bed', 'dining table', 'toilet', 'TV', 'laptop',
   'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven',
   'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
-  'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+  'scissors', 'teddy bear', 'hair drier', 'toothbrush','1111111'
 ]  # 类别名称
