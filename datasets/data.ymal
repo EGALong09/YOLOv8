@@ -1,0 +1,6 @@
+path: ./dataset  # 数据集路径
+train: images/train  # 训练集图片文件夹
+val: images/val  # 验证集图片文件夹
+
+nc: 2  # 类别数量
+names: ['class1', 'class2']  # 类别名称
