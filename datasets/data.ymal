@@ -1,4 +1,4 @@
-path: ./dataset  # 数据集路径
+path: ../../../../datasets/yolov8_cocotest  # 数据集路径
 train: images/train  # 训练集图片文件夹
 val: images/val  # 验证集图片文件夹
 
