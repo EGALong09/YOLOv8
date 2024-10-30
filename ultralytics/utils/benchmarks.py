@@ -47,7 +47,7 @@ from ultralytics.utils.torch_utils import get_cpu_info, select_device
 
 
 def benchmark(
-    model=WEIGHTS_DIR / "yolov8n.pt",
+    model=WEIGHTS_DIR / "yolo11n.pt",
     data=None,
     imgsz=160,
     half=False,
@@ -76,7 +76,7 @@ def benchmark(
     Examples:
         Benchmark a YOLO model with default settings:
         >>> from ultralytics.utils.benchmarks import benchmark
-        >>> benchmark(model="yolov8n.pt", imgsz=640)
+        >>> benchmark(model="yolo11n.pt", imgsz=640)
     """
     import pandas as pd  # scope for faster 'import ultralytics'
 
@@ -536,8 +536,8 @@ class ProfileModels:
         """Generates a table row string with model performance metrics including inference times and model details."""
         layers, params, gradients, flops = model_info
         return (
-            f"| {model_name:18s} | {self.imgsz} | - | {t_onnx[0]:.2f} ± {t_onnx[1]:.2f} ms | {t_engine[0]:.2f} ± "
-            f"{t_engine[1]:.2f} ms | {params / 1e6:.1f} | {flops:.1f} |"
+            f"| {model_name:18s} | {self.imgsz} | - | {t_onnx[0]:.1f}±{t_onnx[1]:.1f} ms | {t_engine[0]:.1f}±"
+            f"{t_engine[1]:.1f} ms | {params / 1e6:.1f} | {flops:.1f} |"
         )
 
     @staticmethod

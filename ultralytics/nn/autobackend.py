@@ -1,7 +1,6 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 
 import ast
-import contextlib
 import json
 import platform
 import zipfile
@@ -45,8 +44,10 @@ def check_class_names(names):
 def default_class_names(data=None):
     """Applies default class names to an input YAML file or returns numerical class names."""
     if data:
-        with contextlib.suppress(Exception):
+        try:
             return yaml_load(check_yaml(data))["names"]
+        except Exception:
+            pass
     return {i: f"class{i}" for i in range(999)}  # return default if above errors
 
 
@@ -81,7 +82,7 @@ class AutoBackend(nn.Module):
     @torch.no_grad()
     def __init__(
         self,
-        weights="yolov8n.pt",
+        weights="yolo11n.pt",
         device=torch.device("cpu"),
         dnn=False,
         data=None,
@@ -125,7 +126,7 @@ class AutoBackend(nn.Module):
         fp16 &= pt or jit or onnx or xml or engine or nn_module or triton  # FP16
         nhwc = coreml or saved_model or pb or tflite or edgetpu  # BHWC formats (vs torch BCWH)
         stride = 32  # default stride
-        model, metadata = None, None
+        model, metadata, task = None, None, None
 
         # Set device
         cuda = torch.cuda.is_available() and device.type != "cpu"  # use CUDA
@@ -188,10 +189,32 @@ class AutoBackend(nn.Module):
                 check_requirements("numpy==1.23.5")
             import onnxruntime
 
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if cuda else ["CPUExecutionProvider"]
+            providers = onnxruntime.get_available_providers()
+            if not cuda and "CUDAExecutionProvider" in providers:
+                providers.remove("CUDAExecutionProvider")
+            elif cuda and "CUDAExecutionProvider" not in providers:
+                LOGGER.warning("WARNING ⚠️ Failed to start ONNX Runtime session with CUDA. Falling back to CPU...")
+                device = torch.device("cpu")
+                cuda = False
+            LOGGER.info(f"Preferring ONNX Runtime {providers[0]}")
             session = onnxruntime.InferenceSession(w, providers=providers)
             output_names = [x.name for x in session.get_outputs()]
             metadata = session.get_modelmeta().custom_metadata_map
+            dynamic = isinstance(session.get_outputs()[0].shape[0], str)
+            if not dynamic:
+                io = session.io_binding()
+                bindings = []
+                for output in session.get_outputs():
+                    y_tensor = torch.empty(output.shape, dtype=torch.float16 if fp16 else torch.float32).to(device)
+                    io.bind_output(
+                        name=output.name,
+                        device_type=device.type,
+                        device_id=device.index if cuda else 0,
+                        element_type=np.float16 if fp16 else np.float32,
+                        shape=tuple(y_tensor.shape),
+                        buffer_ptr=y_tensor.data_ptr(),
+                    )
+                    bindings.append(y_tensor)
 
         # OpenVINO
         elif xml:
@@ -225,10 +248,10 @@ class AutoBackend(nn.Module):
                 import tensorrt as trt  # noqa https://developer.nvidia.com/nvidia-tensorrt-download
             except ImportError:
                 if LINUX:
-                    check_requirements("tensorrt>7.0.0,<=10.1.0")
+                    check_requirements("tensorrt>7.0.0,!=10.1.0")
                 import tensorrt as trt  # noqa
             check_version(trt.__version__, ">=7.0.0", hard=True)
-            check_version(trt.__version__, "<=10.1.0", msg="https://github.com/ultralytics/ultralytics/pull/14239")
+            check_version(trt.__version__, "!=10.1.0", msg="https://github.com/ultralytics/ultralytics/pull/14239")
             if device.type == "cpu":
                 device = torch.device("cuda:0")
             Binding = namedtuple("Binding", ("name", "dtype", "shape", "data", "ptr"))
@@ -264,8 +287,8 @@ class AutoBackend(nn.Module):
                         if -1 in tuple(model.get_tensor_shape(name)):
                             dynamic = True
                             context.set_input_shape(name, tuple(model.get_tensor_profile_shape(name, 0)[1]))
-                            if dtype == np.float16:
-                                fp16 = True
+                        if dtype == np.float16:
+                            fp16 = True
                     else:
                         output_names.append(name)
                     shape = tuple(context.get_tensor_shape(name))
@@ -321,8 +344,10 @@ class AutoBackend(nn.Module):
             with open(w, "rb") as f:
                 gd.ParseFromString(f.read())
             frozen_func = wrap_frozen_graph(gd, inputs="x:0", outputs=gd_outputs(gd))
-            with contextlib.suppress(StopIteration):  # find metadata in SavedModel alongside GraphDef
+            try:  # find metadata in SavedModel alongside GraphDef
                 metadata = next(Path(w).resolve().parent.rglob(f"{Path(w).stem}_saved_model*/metadata.yaml"))
+            except StopIteration:
+                pass
 
         # TFLite or TFLite Edge TPU
         elif tflite or edgetpu:  # https://www.tensorflow.org/lite/guide/python#install_tensorflow_lite_for_python
@@ -333,11 +358,16 @@ class AutoBackend(nn.Module):
 
                 Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
             if edgetpu:  # TF Edge TPU https://coral.ai/software/#edgetpu-runtime
-                LOGGER.info(f"Loading {w} for TensorFlow Lite Edge TPU inference...")
+                device = device[3:] if str(device).startswith("tpu") else ":0"
+                LOGGER.info(f"Loading {w} on device {device[1:]} for TensorFlow Lite Edge TPU inference...")
                 delegate = {"Linux": "libedgetpu.so.1", "Darwin": "libedgetpu.1.dylib", "Windows": "edgetpu.dll"}[
                     platform.system()
                 ]
-                interpreter = Interpreter(model_path=w, experimental_delegates=[load_delegate(delegate)])
+                interpreter = Interpreter(
+                    model_path=w,
+                    experimental_delegates=[load_delegate(delegate, options={"device": device})],
+                )
+                device = "cpu"  # Required, otherwise PyTorch will try to use the wrong device
             else:  # TFLite
                 LOGGER.info(f"Loading {w} for TensorFlow Lite inference...")
                 interpreter = Interpreter(model_path=w)  # load TFLite model
@@ -345,10 +375,12 @@ class AutoBackend(nn.Module):
             input_details = interpreter.get_input_details()  # inputs
             output_details = interpreter.get_output_details()  # outputs
             # Load metadata
-            with contextlib.suppress(zipfile.BadZipFile):
+            try:
                 with zipfile.ZipFile(w, "r") as model:
                     meta_file = model.namelist()[0]
                     metadata = ast.literal_eval(model.read(meta_file).decode("utf-8"))
+            except zipfile.BadZipFile:
+                pass
 
         # TF.js
         elif tfjs:
@@ -467,8 +499,22 @@ class AutoBackend(nn.Module):
 
         # ONNX Runtime
         elif self.onnx:
-            im = im.cpu().numpy()  # torch to numpy
-            y = self.session.run(self.output_names, {self.session.get_inputs()[0].name: im})
+            if self.dynamic:
+                im = im.cpu().numpy()  # torch to numpy
+                y = self.session.run(self.output_names, {self.session.get_inputs()[0].name: im})
+            else:
+                if not self.cuda:
+                    im = im.cpu()
+                self.io.bind_input(
+                    name="images",
+                    device_type=im.device.type,
+                    device_id=im.device.index if im.device.type == "cuda" else 0,
+                    element_type=np.float16 if self.fp16 else np.float32,
+                    shape=tuple(im.shape),
+                    buffer_ptr=im.data_ptr(),
+                )
+                self.session.run_with_iobinding(self.io)
+                y = self.bindings
 
         # OpenVINO
         elif self.xml:
@@ -496,7 +542,7 @@ class AutoBackend(nn.Module):
 
         # TensorRT
         elif self.engine:
-            if self.dynamic or im.shape != self.bindings["images"].shape:
+            if self.dynamic and im.shape != self.bindings["images"].shape:
                 if self.is_trt10:
                     self.context.set_input_shape("images", im.shape)
                     self.bindings["images"] = self.bindings["images"]._replace(shape=im.shape)
